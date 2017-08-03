@@ -1,0 +1,23 @@
+{
+  "name": "npm-flatten",
+  "version": "0.0.1",
+  "description": "Script for flattening large Node deploys, using symlinks",
+  "main": "bin/npm-share.js",
+  "engines": {
+    "node": "4.*"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bbc/npm-share.git"
+  },
+  "author": "",
+  "license": "unlicensed",
+  "private": "true",
+  "dependencies": {
+    "commander": "^2.11.0",
+    "fs-extra": "^4.0.0"
+  }
+}
