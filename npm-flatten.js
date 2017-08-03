@@ -6,12 +6,16 @@
  * Given a Node app directory, flattens any Node modules within it.
  * Modules are given unique hashes so that if there are multiple versions,
  * they are maintained.
+ *
+ * Known bug: the hash of a module's dependencies is made before parent dependencies are inherited.
+ *
  */
 
 const fs = require('fs-extra'),
       childProcess = require('child_process'),
       program = require('commander'),
       path = require('path'),
+      crypto = require('crypto'),
       foundPeerDependencies = {},
       md5Command = findMd5Command()
 let pathToUse = undefined, sharedModules = undefined, exitValue = 0
@@ -116,8 +120,9 @@ function replaceMissingDependenciesInChildren(missingDependencies, nodeModulesIn
             let nodeModuleDirOfPlaceThatNeedsDependency = path.join(placeThatNeedsDependency, 'node_modules')
             fs.ensureDirSync(nodeModuleDirOfPlaceThatNeedsDependency)
             let symlinkDest = path.join(nodeModuleDirOfPlaceThatNeedsDependency, moduleName)
+
             verbose(`${moduleName} - To resolve a dependency, adding ${foundDirectory} as a symlink into ${symlinkDest}`)
-            fs.ensureSymlinkSync(foundDirectory, symlinkDest)
+            ensureRelativeSymlinkSync(foundDirectory, symlinkDest)
         })
         delete missingDependencies[moduleName]
     })
@@ -125,8 +130,8 @@ function replaceMissingDependenciesInChildren(missingDependencies, nodeModulesIn
     return missingDependencies
 }
 
-function flattenedDirectoryName(modulePackage, md5) {
-    return [modulePackage.name, modulePackage.version, program.production ? 'production' : 'dev', process.version, md5].join('@')
+function flattenedDirectoryName(modulePackage, directoryHash, dependencyLinksHash) {
+    return [modulePackage.name, modulePackage.version, program.production ? 'production' : 'dev', process.version, directoryHash, dependencyLinksHash].join('@')
 }
 
 /*
@@ -134,8 +139,9 @@ function flattenedDirectoryName(modulePackage, md5) {
  * it if already there). A symlink is then added so that it still compiles.
  */
 function flattenModule(fullPath, modulePackage) {
-    let md5 = getMd5OfDir(fullPath)
-    let sharedPath = path.join(sharedModules, flattenedDirectoryName(modulePackage, md5))
+    const directoryHash = getDirectoryHash(fullPath)
+    const dependencyLinksHash = getModuleDependencyLinksHash(fullPath)
+    let sharedPath = path.join(sharedModules, flattenedDirectoryName(modulePackage, directoryHash, dependencyLinksHash))
 
     let missingDependencies = []
     if (fs.existsSync(sharedPath)) {
@@ -149,7 +155,7 @@ function flattenModule(fullPath, modulePackage) {
             checkForMissingDependencies(modulePackage.dependencies, sharedPath)
     }
 
-    fs.ensureSymlinkSync(sharedPath, fullPath)
+    ensureRelativeSymlinkSync(sharedPath, fullPath)
     return { sharedPath: sharedPath, missingDependencies: missingDependencies, modulePackage: modulePackage }
 }
 
@@ -173,8 +179,15 @@ function checkForMissingDependencies(dependencies, sharedPath) {
 /**
  * Given a path, returns an md5. Acts recursively.
  */
-function getMd5OfDir(fullPath) {
-    const md5GenerationCommand = 'cd "' + fullPath +'" && find . \\( -type l -o -type f \\)  | gtar -c -T "-" --mtime="1970-01-01 00:00:00" --owner=0 --group=0 | ' + md5Command
+function getDirectoryHash(fullPath) {
+    /**
+     * The logic here is:
+     * We need an md5 of this module directory.
+     * We do this by analysing all files. Not symlinks as the flattened dependencies are handled as another hash.
+     * We exclude package.json as it can include bits written by npm
+     * We ignore the owner and group and modified time properties - they are not relevant.
+     */
+    const md5GenerationCommand = 'cd "' + fullPath +'" && find . -type f -not -name package.json | gtar -c -T "-" --mtime="1970-01-01 00:00:00" --owner=0 --group=0 | ' + md5Command
     verbose(`[${md5GenerationCommand}]`)
     const result = childProcess.execSync(md5GenerationCommand)
     const md5 = result.toString().replace(/[-\s]*\n$/, '')
@@ -240,12 +253,14 @@ function fixMovedSymlinks(d) {
         }
         else if (stats.isSymbolicLink()) {
             let dest = fs.readlinkSync(f)
-            if (!fs.existsSync(dest)) {
+            let destAbsolute = path.resolve(path.dirname(f), dest)
+            if (!fs.existsSync(destAbsolute)) {
                 let correctDest = path.join(sharedModules, path.basename(dest))
+
                 if (fs.existsSync(correctDest)) {
                     verbose(`Fixing symlink ${f} - was ${dest}, now ${correctDest}`)
                     fs.unlinkSync(f)
-                    fs.ensureSymlinkSync(correctDest, f)
+                    ensureRelativeSymlinkSync(correctDest, f)
                 }
             }
         }
@@ -281,7 +296,49 @@ function checkCommandLineArguments() {
 
     if (!fs.existsSync(sharedModules)) throw new Error('Cannot find the shared module directory ' + sharedModules)
     if (!fs.statSync(sharedModules).isDirectory()) throw new Error(sharedModules + ' is not a directory')
-    if (sharedModules.indexOf(pathToUse) === 0) throw new Error('Shared modules directory (' + sharedModules + ') cannot exist within path being flattened')
+    if (path.basename(sharedModules) === 'node_modules')
+        throw new Error(`Shared modules directory (${sharedModules}) cannot end with node_modules`)
+
+    // It doesn't make sense if the shared modules directory is within the thing being flattened:
+    if (sharedModules.indexOf(pathToUse) === 0) {
+        // Unless the top dir is not being flattened, in which case it's ok if it's just one level deep
+        if (program.doNotFlattenTopDir) {
+            if (path.dirname(sharedModules) !== pathToUse) {
+                throw new Error(`Shared modules directory (${sharedModules}) cannot be deep within the path being flattened (${pathToUse})`)
+            }
+        }
+        else {
+            throw new Error('Shared modules directory (' + sharedModules + ') cannot exist within path being flattened (unless you use --do-not-flatten-top-dir)')
+        }
+    }
+}
+
+function getModuleDependencyLinksHash(d) {
+    let links = getModuleDependencyLinks(d)
+    let asString = Object.keys(links).map(l => links[l]).sort().join('\n')
+    return crypto.createHash('md5').update(asString).digest('hex')
+}
+
+/**
+ * Given a path, returns the flattened symlinks within node_modules
+ */
+function getModuleDependencyLinks(d) {
+    const nodeModulesPath = path.join(d, 'node_modules')
+    if (!fs.existsSync(nodeModulesPath)) return {}
+    let foundLinks = {}
+    fs.readdirSync(nodeModulesPath).forEach(f => {
+        const fullPath = path.join(nodeModulesPath, f)
+        const stats = fs.lstatSync(fullPath)
+        if (stats.isDirectory() && f !== '.bin') {
+            throw new Error('Found something not flattened:' + f)
+        }
+        else if (stats.isSymbolicLink()) {
+            let dest = fs.readlinkSync(fullPath)
+            foundLinks[f] = path.basename(dest)
+        }
+    })
+
+    return foundLinks
 }
 
 function setupLogStream() {
@@ -302,6 +359,12 @@ function isNodeModulesDir(d) {
 
 function isSingleModuleDir(d) {
     return fs.existsSync(path.join(d, 'package.json'))
+}
+
+function ensureRelativeSymlinkSync(actualDir, symlinkDir) {
+    let actualDirRelative = path.relative(path.dirname(symlinkDir), actualDir)
+    verbose(`Symlink '${actualDir}' to '${symlinkDir}'`)
+    fs.ensureSymlinkSync(actualDirRelative, symlinkDir)
 }
 
 function verbose(str) {
