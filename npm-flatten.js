@@ -59,12 +59,12 @@ function handleSingleModuleDir(d, doNotFlattenThisDir) {
     let missingDependencies = {}
 
     // STEP 1: Flatten any nested modules:
-    if (hasModulesDirWithinThis) missingDependencies = handleNodeModulesDir(modulesDirWithinThis) // depth-first
+    const modulePackage = getModulePackage(d)
+    if (hasModulesDirWithinThis) missingDependencies = handleNodeModulesDir(modulesDirWithinThis, modulePackage) // depth-first
 
     if (doNotFlattenThisDir) return { missingDependencies: {} }
 
     // STEP 2: Flatten this module:
-    const modulePackage = getModulePackage(d)
     verbose(`[${d}] - ${modulePackage.name} @ ${modulePackage.version}`)
     let moduleInfo = flattenModule(d, modulePackage)
 
@@ -75,13 +75,19 @@ function handleSingleModuleDir(d, doNotFlattenThisDir) {
 
 /**
  * If this is a node_modules directory, simply loop through each module within it.
+ * @param {String} Name of directory
+ * @param {Object} package.json of parent directory
  */
-function handleNodeModulesDir(d) {
+function handleNodeModulesDir(d, modulePackage) {
     let missingDependencies = {}, modulesAndTheirSharedPaths = {}
 
     fs.readdirSync(d).forEach(name => {
         let fullPath = d + '/' + name
         if (!isSingleModuleDir(fullPath)) return
+        if (!modulePackage.dependencies || !modulePackage.dependencies[name]) {
+            verbose(`'${name}' in '${d}' not present in package.json depedencies, skipping`)
+            return
+        }
 
         let moduleInfo = handleSingleModuleDir(fullPath)
         modulesAndTheirSharedPaths[name] = moduleInfo.sharedPath
@@ -131,7 +137,8 @@ function replaceMissingDependenciesInChildren(missingDependencies, nodeModulesIn
 }
 
 function flattenedDirectoryName(modulePackage, directoryHash, dependencyLinksHash) {
-    return [modulePackage.name, modulePackage.version, program.production ? 'production' : 'dev', process.version, directoryHash, dependencyLinksHash].join('@')
+    // return [modulePackage.name, modulePackage.version, program.production ? 'production' : 'dev', process.version, directoryHash, dependencyLinksHash].join('@')
+    return modulePackage.name + '@' + [modulePackage.version, program.production ? 'production' : 'dev', process.version, 'files=' + directoryHash, 'deps=' + dependencyLinksHash].join(',')
 }
 
 /*
@@ -186,13 +193,14 @@ function getDirectoryHash(fullPath) {
      * We do this by analysing all files. Not symlinks as the flattened dependencies are handled as another hash.
      * We exclude package.json as it can include bits written by npm
      * We ignore the owner and group and modified time properties - they are not relevant.
+      * A 12-char hash is used - sufficiently unique, not too long.
      */
     const md5GenerationCommand = 'cd "' + fullPath +'" && find . -type f -not -name package.json | gtar -c -T "-" --mtime="1970-01-01 00:00:00" --owner=0 --group=0 | ' + md5Command
     verbose(`[${md5GenerationCommand}]`)
     const result = childProcess.execSync(md5GenerationCommand)
     const md5 = result.toString().replace(/[-\s]*\n$/, '')
     if (md5.length !== 32) throw new Error('Failed to get md5. Command: ' + md5GenerationCommand + ', output: ' + md5)
-    return md5
+    return md5.substring(20)
 }
 
 /**
@@ -224,15 +232,14 @@ function getModulePackage(fullPath) {
     return modulePackage
 }
 
-function mergePeerDependenciesIntoDependencies(modulePackage) {
-    if (modulePackage.peerDependencies) {
-        if (!modulePackage.dependencies) modulePackage.dependencies = {}
-        Object.keys(modulePackage.peerDependencies).forEach(m => {
-            verbose(`Module ${modulePackage.name} has a peer depedency ${m} which will be added to the list of dependencies to check`)
-            modulePackage.dependencies[m] = modulePackage.peerDependencies[m]
-            addToPeerDependenciesList(modulePackage.name, m)
-        })
-    }
+function mergePeerDependenciesIntoDependencies(p) {
+    if (!p.peerDependencies) return
+    if (!p.dependencies) p.dependencies = {}
+    Object.keys(p.peerDependencies).forEach(m => {
+        verbose(`Module ${p.name} has a peer depedency ${m} which will be added to the list of dependencies to check`)
+        p.dependencies[m] = p.peerDependencies[m]
+        addToPeerDependenciesList(p.name, m)
+    })
 }
 
 function addToPeerDependenciesList(m1, m2) {
@@ -313,10 +320,14 @@ function checkCommandLineArguments() {
     }
 }
 
+/**
+ * Create a hash that uniquely identifies all modules dependencencies.
+ * A 12-char hash is used - sufficiently unique, not too long.
+ */
 function getModuleDependencyLinksHash(d) {
     let links = getModuleDependencyLinks(d)
     let asString = Object.keys(links).map(l => links[l]).sort().join('\n')
-    return crypto.createHash('md5').update(asString).digest('hex')
+    return crypto.createHash('md5').update(asString).digest('hex').substring(20)
 }
 
 /**
@@ -329,10 +340,7 @@ function getModuleDependencyLinks(d) {
     fs.readdirSync(nodeModulesPath).forEach(f => {
         const fullPath = path.join(nodeModulesPath, f)
         const stats = fs.lstatSync(fullPath)
-        if (stats.isDirectory() && f !== '.bin') {
-            throw new Error('Found something not flattened:' + f)
-        }
-        else if (stats.isSymbolicLink()) {
+        if (stats.isSymbolicLink()) {
             let dest = fs.readlinkSync(fullPath)
             foundLinks[f] = path.basename(dest)
         }
