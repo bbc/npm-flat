@@ -310,8 +310,9 @@ function checkCommandLineArguments() {
     if (sharedModules.indexOf(pathToUse) === 0) {
         // Unless the top dir is not being flattened, in which case it's ok if it's just one level deep
         if (program.doNotFlattenTopDir) {
-            if (path.dirname(sharedModules) !== pathToUse) {
-                throw new Error(`Shared modules directory (${sharedModules}) cannot be deep within the path being flattened (${pathToUse})`)
+            if (path.dirname(sharedModules) !== pathToUse &&
+                path.dirname(sharedModules) !== path.join(pathToUse, 'node_modules')) {
+                throw new Error(`Shared modules directory (${sharedModules}) can only be at the top level within the directory being flattened (${pathToUse}) or within its immediate node_modules directory.`)
             }
         }
         else {
@@ -319,13 +320,17 @@ function checkCommandLineArguments() {
         }
     }
 
-    sharedModules = path.join(sharedModules, 'node_modules')
-    if (fs.existsSync(sharedModules)) {
-        if (!fs.statSync(sharedModules).isDirectory()) throw new Error(sharedModules + ' is not a directory')
-    }
-    else {
-        fs.mkdirSync(sharedModules)
-    }
+    /**
+     * We create a node_modules directory within the shared modules dir, and put the modules in there.
+     * This is because some scripts - such as Babel v6 - expect modules (after resolving) to live within node_modules.
+     */
+    // sharedModules = path.join(sharedModules, 'node_modules')
+    // if (fs.existsSync(sharedModules)) {
+    //     if (!fs.statSync(sharedModules).isDirectory()) throw new Error(sharedModules + ' is not a directory')
+    // }
+    // else {
+    //     fs.mkdirSync(sharedModules)
+    // }
 
 }
 
