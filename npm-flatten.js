@@ -303,8 +303,8 @@ function checkCommandLineArguments() {
 
     if (!fs.existsSync(sharedModules)) throw new Error('Cannot find the shared module directory ' + sharedModules)
     if (!fs.statSync(sharedModules).isDirectory()) throw new Error(sharedModules + ' is not a directory')
-    // if (path.basename(sharedModules) === 'node_modules')
-    //     throw new Error(`Shared modules directory (${sharedModules}) cannot end with node_modules`)
+    if (path.basename(sharedModules) === 'node_modules')
+        throw new Error(`Shared modules directory (${sharedModules}) cannot end with node_modules`)
 
     // It doesn't make sense if the shared modules directory is within the thing being flattened:
     if (sharedModules.indexOf(pathToUse) === 0) {
@@ -318,6 +318,15 @@ function checkCommandLineArguments() {
             throw new Error('Shared modules directory (' + sharedModules + ') cannot exist within path being flattened (unless you use --do-not-flatten-top-dir)')
         }
     }
+
+    sharedModules = path.join(sharedModules, 'node_modules')
+    if (fs.existsSync(sharedModules)) {
+        if (!fs.statSync(sharedModules).isDirectory()) throw new Error(sharedModules + ' is not a directory')
+    }
+    else {
+        fs.mkdirSync(sharedModules)
+    }
+
 }
 
 /**
