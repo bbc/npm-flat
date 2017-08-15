@@ -33,7 +33,11 @@ function go() {
     fixMovedSymlinks(sharedModules)
     let exitValue = 0
     if (Object.keys(moduleInfo.missingDependencies).length) {
-        error('Unmet dependencies:' + JSON.stringify(moduleInfo.missingDependencies))
+        let msg = 'Unmet dependencies:\n' +
+            Object.keys(moduleInfo.missingDependencies).map(d => {
+                return moduleInfo.missingDependencies[d].map(x => ` - ${d} is expected by ${x}`).join('\n')
+            }).join('\n')
+        error(msg)
         exitValue = 1
     }
 
@@ -58,11 +62,19 @@ function handleSingleModuleDir(d, doNotFlattenThisDir) {
     let hasModulesDirWithinThis = fs.existsSync(modulesDirWithinThis)
     let missingDependencies = {}
 
-    // STEP 1: Flatten any nested modules:
+    // STEP 1: Skip things that contain peer dependencies
+    // It would be possible to flatten things with peer dependencies, but it'd be tricky
+    // because peer dependencies happen further up the now-removed tree.
     const modulePackage = getModulePackage(d)
+    if (modulePackage.peerDependencies && Object.keys(modulePackage.peerDependencies).length) {
+        verbose(`[${d}] - Skipping because it contains peer dependencies`)
+        return { missingDependencies: {} }
+    }
+
+    // STEP 2: Flatten any nested modules:
     if (hasModulesDirWithinThis) missingDependencies = handleNodeModulesDir(modulesDirWithinThis, modulePackage) // depth-first
 
-    if (doNotFlattenThisDir) return { missingDependencies: {} }
+    if (doNotFlattenThisDir) return { missingDependencies: missingDependencies }
 
     // STEP 2: Flatten this module:
     verbose(`[${d}] - ${modulePackage.name} @ ${modulePackage.version}`)
