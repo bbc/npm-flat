@@ -66,10 +66,10 @@ function handleSingleModuleDir(d, doNotFlattenThisDir) {
     // It would be possible to flatten things with peer dependencies, but it'd be tricky
     // because peer dependencies happen further up the now-removed tree.
     const modulePackage = getModulePackage(d)
-    if (modulePackage.peerDependencies && Object.keys(modulePackage.peerDependencies).length) {
-        verbose(`[${d}] - Skipping because it contains peer dependencies`)
-        return { missingDependencies: {} }
-    }
+    // if (modulePackage.peerDependencies && Object.keys(modulePackage.peerDependencies).length) {
+    //     verbose(`[${d}] - Skipping because it contains peer dependencies`)
+    //     return { missingDependencies: {} }
+    // }
 
     // STEP 2: Flatten any nested modules:
     if (hasModulesDirWithinThis) missingDependencies = handleNodeModulesDir(modulesDirWithinThis, modulePackage) // depth-first
@@ -91,21 +91,38 @@ function handleSingleModuleDir(d, doNotFlattenThisDir) {
  * @param {Object} package.json of parent directory
  */
 function handleNodeModulesDir(d, modulePackage) {
-    let missingDependencies = {}, modulesAndTheirSharedPaths = {}
+    let missingDependencies = {}, modulesAndTheirSharedPaths = {}, skipped = []
+
+    function handleModule(name, fullPath) {
+        let moduleInfo = handleSingleModuleDir(fullPath)
+        modulesAndTheirSharedPaths[name] = moduleInfo.sharedPath
+        if (Object.keys(moduleInfo.missingDependencies).length) {
+            verbose(`${d} has moved to ${moduleInfo.sharedPath} but is missing dependencies ${JSON.stringify(moduleInfo.missingDependencies)}`)
+            missingDependencies = mergeDependencies(missingDependencies, moduleInfo.missingDependencies)
+        }
+    }
 
     fs.readdirSync(d).forEach(name => {
         let fullPath = d + '/' + name
         if (!isSingleModuleDir(fullPath)) return
         if (!modulePackage.dependencies || !modulePackage.dependencies[name]) {
             verbose(`'${name}' in '${d}' not present in package.json depedencies, skipping`)
+            skipped[name] = fullPath
             return
         }
 
-        let moduleInfo = handleSingleModuleDir(fullPath)
-        modulesAndTheirSharedPaths[name] = moduleInfo.sharedPath
-        if (Object.keys(moduleInfo.missingDependencies).length) {
-            verbose(`${d} has moved to ${moduleInfo.sharedPath} but is missing dependencies ${JSON.stringify(moduleInfo.missingDependencies)}`)
-            missingDependencies = mergeDependencies(missingDependencies, moduleInfo.missingDependencies)
+        handleModule(name, fullPath)
+    })
+
+    /*
+     * Special case: there may be a module here that's not an immediate dependency of this
+     * parent module, but is by one of the children. This happens particularly with peer depdendencies.
+     */
+    Object.keys(skipped).forEach(skippedModuleName => {
+        if (missingDependencies[skippedModuleName]) {
+            verbose(`${skippedModuleName} was skipped but will be added as it is wanted by ` +
+                    missingDependencies[skippedModuleName].join(', '))
+            handleModule(skippedModuleName, skipped[skippedModuleName])
         }
     })
 

@@ -29,28 +29,23 @@ describe('peer depedency same dir', function() {
 
     it('has correct chared modules path', () => {
         let sharedModulesMade = fs.readdirSync(sharedModulesPath).sort()
-        expect(sharedModulesMade).to.have.length(1)
+        expect(sharedModulesMade).to.have.length(4)
         expect(sharedModulesMade).to.deep.equal([
-          "m1@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e",
-        //   "m2@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=3209647222dd",
-        //   "m3@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e",
-        //   "m4@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e"
+          "m1@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=04a86da4fd26",
+          "m2@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=3209647222dd",
+          "m3@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e",
+          "m4@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e"
         ])
     })
 
     it('has no node_modules directories within node_modules other than symlinks', () => {
-        expect(testHelpers.listDirectoriesWithinAllNodeModules(tmpObj.name)).to.deep.equal([
-            tmpObj.name + "/shared_modules/m1@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e/node_modules/m2",
-            tmpObj.name + "/shared_modules/m1@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e/node_modules/m2/node_modules/m3",
-            tmpObj.name + "/shared_modules/m1@UNKNOWN,production,v6.3.0,files=324180bafd9f,deps=0998ecf8427e/node_modules/m2/node_modules/m4"
-        ])
+        expect(testHelpers.listDirectoriesWithinAllNodeModules(tmpObj.name)).to.deep.equal([])
     })
 
     it('has the right symlinks within node_modules', () => {
         expect(testHelpers.listSymlinksWithinAllNodeModules(tmpObj.name)
             .map(x => { return path.basename(x) }).sort())
-            // .to.deep.equal(['m2', 'm3', 'm4'])
-            .to.deep.equal([])
+            .to.deep.equal(['m2', 'm3', 'm4'])
     })
 
     it('tidy up', function() {
